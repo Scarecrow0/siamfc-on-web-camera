@@ -4,5 +4,6 @@
 	"stop_on_failure": 0,
 	"dataset": "validation",
 	"video": "all",
-	"start_frame": 0
+	"start_frame": 0,
+	"comments": ""
 }

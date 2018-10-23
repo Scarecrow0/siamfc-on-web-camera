@@ -1,12 +1,15 @@
 from __future__ import division
-import sys
+
 import os
+import sys
+
 import numpy as np
 from PIL import Image
+
 import src.siamese as siam
-from src.tracker import tracker
 from src.parse_arguments import parse_arguments
 from src.region_to_bbox import region_to_bbox
+from src.tracker import tracker
 
 
 def main():
@@ -35,50 +38,57 @@ def main():
         ious = np.zeros(nv * evaluation.n_subseq)
         lengths = np.zeros(nv * evaluation.n_subseq)
         for i in range(nv):
+            # 划分视频段落
             gt, frame_name_list, frame_sz, n_frames = _init_video(env, evaluation, videos_list[i])
-            starts = np.rint(np.linspace(0, n_frames - 1, evaluation.n_subseq + 1))
+            starts, subseq_len = np.linspace(0, n_frames - 1, evaluation.n_subseq + 1, retstep=True)
+            starts = np.rint(starts)
             starts = starts[0:evaluation.n_subseq]
+            print("cal video num %d %s, subseq length %d\n" % (i, videos_list[i], subseq_len))
             for j in range(evaluation.n_subseq):
+                # 根据划分的段落取出第一帧
                 start_frame = int(starts[j])
+                print("start frame %d" % start_frame)
+                # gt为 ground truth, 进行对照的真实值
                 gt_ = gt[start_frame:, :]
+                # 根据段落取出相关数据的段落
                 frame_name_list_ = frame_name_list[start_frame:]
+                # 转换gt bbox 的记录格式，现在是保存box的中心的坐标以及这个box的宽高
                 pos_x, pos_y, target_w, target_h = region_to_bbox(gt_[0])
                 idx = i * evaluation.n_subseq + j
+                # 将序列传入模型，启动tracking
                 bboxes, speed[idx] = tracker(hp, run, design, frame_name_list_, pos_x, pos_y,
-                                                                     target_w, target_h, final_score_sz, filename,
-                                                                     image, templates_z, scores, start_frame)
+                                             target_w, target_h, final_score_sz, filename,
+                                             image, templates_z, scores, start_frame)
                 lengths[idx], precisions[idx], precisions_auc[idx], ious[idx] = _compile_results(gt_, bboxes, evaluation.dist_threshold)
-                print str(i) + ' -- ' + videos_list[i] + \
-                ' -- Precision: ' + "%.2f" % precisions[idx] + \
-                ' -- Precisions AUC: ' + "%.2f" % precisions_auc[idx] + \
-                ' -- IOU: ' + "%.2f" % ious[idx] + \
-                ' -- Speed: ' + "%.2f" % speed[idx] + ' --'
-                print
-
+                print(str(i) + ' -- ' + videos_list[i] +
+                      ' -- Precision: ' + "%.2f" % precisions[idx] +
+                      ' -- Precisions AUC: ' + "%.2f" % precisions_auc[idx] +
+                      ' -- IOU: ' + "%.2f" % ious[idx] +
+                      ' -- Speed: ' + "%.2f" % speed[idx] + ' --')
+                print()
         tot_frames = np.sum(lengths)
         mean_precision = np.sum(precisions * lengths) / tot_frames
         mean_precision_auc = np.sum(precisions_auc * lengths) / tot_frames
         mean_iou = np.sum(ious * lengths) / tot_frames
         mean_speed = np.sum(speed * lengths) / tot_frames
-        print '-- Overall stats (averaged per frame) on ' + str(nv) + ' videos (' + str(tot_frames) + ' frames) --'
-        print ' -- Precision ' + "(%d px)" % evaluation.dist_threshold + ': ' + "%.2f" % mean_precision +\
-              ' -- Precisions AUC: ' + "%.2f" % mean_precision_auc +\
-              ' -- IOU: ' + "%.2f" % mean_iou +\
-              ' -- Speed: ' + "%.2f" % mean_speed + ' --'
-        print
-
+        print('-- Overall stats (averaged per frame) on ' + str(nv) + ' videos (' + str(tot_frames) + ' frames) --')
+        print(' -- Precision ' + "(%d px)" % evaluation.dist_threshold + ': ' + "%.2f" % mean_precision +
+              ' -- Precisions AUC: ' + "%.2f" % mean_precision_auc +
+              ' -- IOU: ' + "%.2f" % mean_iou +
+              ' -- Speed: ' + "%.2f" % mean_speed + ' --')
+        print()
     else:
         gt, frame_name_list, _, _ = _init_video(env, evaluation, evaluation.video)
         pos_x, pos_y, target_w, target_h = region_to_bbox(gt[evaluation.start_frame])
         bboxes, speed = tracker(hp, run, design, frame_name_list, pos_x, pos_y, target_w, target_h, final_score_sz,
                                 filename, image, templates_z, scores, evaluation.start_frame)
         _, precision, precision_auc, iou = _compile_results(gt, bboxes, evaluation.dist_threshold)
-        print evaluation.video + \
-              ' -- Precision ' + "(%d px)" % evaluation.dist_threshold + ': ' + "%.2f" % precision +\
-              ' -- Precision AUC: ' + "%.2f" % precision_auc + \
-              ' -- IOU: ' + "%.2f" % iou + \
-              ' -- Speed: ' + "%.2f" % speed + ' --'
-        print
+        print(evaluation.video +
+              ' -- Precision ' + "(%d px)" % evaluation.dist_threshold + ': ' + "%.2f" % precision +
+              ' -- Precision AUC: ' + "%.2f" % precision_auc +
+              ' -- IOU: ' + "%.2f" % iou +
+              ' -- Speed: ' + "%.2f" % speed + ' --')
+        print()
 
 
 def _compile_results(gt, bboxes, dist_threshold):
@@ -119,11 +129,13 @@ def _init_video(env, evaluation, video):
     frame_name_list = [f for f in os.listdir(video_folder) if f.endswith(".jpg")]
     frame_name_list = [os.path.join(env.root_dataset, evaluation.dataset, video, '') + s for s in frame_name_list]
     frame_name_list.sort()
+    print("init videos")
     with Image.open(frame_name_list[0]) as img:
         frame_sz = np.asarray(img.size)
         frame_sz[1], frame_sz[0] = frame_sz[0], frame_sz[1]
 
     # read the initialization from ground truth
+    print("read the initialization from ground truth")
     gt_file = os.path.join(video_folder, 'groundtruth.txt')
     gt = np.genfromtxt(gt_file, delimiter=',')
     n_frames = len(frame_name_list)
