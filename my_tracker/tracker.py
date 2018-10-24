@@ -1,7 +1,11 @@
 import os
+import time
 
+import cv2
 import scipy.io
+import tensorflow.contrib.lite as tflite
 
+from main import store_dir
 from my_tracker.convolutional import *
 from src.crops import *
 from src.parse_arguments import parse_arguments
@@ -13,20 +17,26 @@ class Tracker:
     def __init__(self):
         hp, evaluation, run, env, design = parse_arguments()
         final_score_sz = hp.response_up * (design.score_sz - 1) + 1
-        
-        self.image_input = tf.placeholder(tf.float32, name='img_in')
-        
-        self.pos_x_ph = tf.placeholder(tf.float64, name='pos_x_ph')
-        self.pos_y_ph = tf.placeholder(tf.float64, name='pos_y_ph')
+
+        self.image_input = tf.placeholder(tf.float32, name='img_in', shape=(360, 640, 3))
+
+        self.pos_x_ph = tf.placeholder(tf.float64, name='pos_x_ph', shape=(1,))
+        self.pos_y_ph = tf.placeholder(tf.float64, name='pos_y_ph', shape=(1,))
         # target的尺寸 size
-        self.z_sz_ph = tf.placeholder(tf.float64, name='z_sz_ph')
-        
+        self.z_sz_ph = tf.placeholder(tf.float64, name='z_sz_ph', shape=(1,))
         # 对search input 进行三种系数的缩放后的输入结果
         #   将search input进行不同大小的缩放，满足当target的scale出现变化时，
         #   tracker也能保证sampler和search input中的target大小尽可能相似
-        self.x_sz0_ph = tf.placeholder(tf.float64, name='x_sz0_ph')
-        self.x_sz1_ph = tf.placeholder(tf.float64, name='x_sz1_ph')
-        self.x_sz2_ph = tf.placeholder(tf.float64, name='x_sz2_ph')
+        self.x_sz0_ph = tf.placeholder(tf.float64, name='x_sz0_ph', shape=(1,))
+        self.x_sz1_ph = tf.placeholder(tf.float64, name='x_sz1_ph', shape=(1,))
+        self.x_sz2_ph = tf.placeholder(tf.float64, name='x_sz2_ph', shape=(1,))
+
+        # self.pos_x_ph = tf.placeholder(tf.float64, name='pos_x_ph', )
+        # self.pos_y_ph = tf.placeholder(tf.float64, name='pos_y_ph', )
+        # self.z_sz_ph = tf.placeholder(tf.float64, name='z_sz_ph', )
+        # self.x_sz0_ph = tf.placeholder(tf.float64, name='x_sz0_ph', )
+        # self.x_sz1_ph = tf.placeholder(tf.float64, name='x_sz1_ph', )
+        # self.x_sz2_ph = tf.placeholder(tf.float64, name='x_sz2_ph', )
         
         self.template_x, self.templates_z, self.scores, \
         self.crop_x, self.crop_z, \
@@ -36,11 +46,16 @@ class Tracker:
         
         self.scale_factors = hp.scale_step ** np.linspace(-np.ceil(hp.scale_num / 2), np.ceil(hp.scale_num / 2),
                                                           hp.scale_num)
+        self.scale_factors = np.expand_dims(self.scale_factors, axis=-1)
         self.final_score_sz = hp.response_up * (design.score_sz - 1) + 1
         
         self.template_data = None
-        self.last_pos_x = 80.
-        self.last_pos_y = 80.
+        """
+        region 形式：
+            中心点坐标 + 目标的长宽
+        """
+        self.last_pos_x = None
+        self.last_pos_y = None
         self.target_w = 160.
         self.target_h = 160.
         
@@ -61,29 +76,46 @@ class Tracker:
     
     def tracking(self, frames):
         bbox_res = []
-        # frames = [tf.convert_to_tensor(each) for each in frames]
+        saver = tf.train.Saver()
+
         with tf.Session() as sess:
-            file_writer = tf.summary.FileWriter('logs', sess.graph)
-            print("tensorboard log created")
             tf.global_variables_initializer().run()
             first_frame = frames[0]
-            print(first_frame.shape)
-            image_, templates_z_, p_z, c_z = sess.run(fetches=[self.image_input, self.templates_z,
-                                                               self.padded_z, self.crop_z],
+
+            """
+            对于坐标的一些设定：
+                设一个图片的横向为X轴，纵向为Y轴，在opencv取出的img的matrix中，
+                Y轴对应的矩阵的0 dim，X轴对应的是矩阵的1dim
+                转换时需要自己进行一下反转
+                随后使用opencv的方法对图片进行修改时，又恢复的之前横向X纵向Y的顺序
+            """
+            print("first_frame.shape %s" % str(first_frame.shape))
+            self.last_pos_x = np.array([first_frame.shape[1] / 2])
+            self.last_pos_y = np.array([first_frame.shape[0] / 2])
+            """
+            bbox:
+                左上点和右下点坐标
+            """
+            bbox_res.append(((int(self.last_pos_x - self.target_w / 2),
+                              int(self.last_pos_y - self.target_h / 2)),
+                             (int(self.last_pos_x + self.target_w / 2),
+                              int(self.last_pos_y + self.target_h / 2))))
+            # file_writer = tf.summary.FileWriter('logs', sess.graph)
+            # print("tensorboard log created")
+
+            image_, templates_z_ = sess.run(fetches=[self.image_input, self.templates_z, ],
                                                       feed_dict={
                                                           self.pos_x_ph: self.last_pos_x,
                                                           self.pos_y_ph: self.last_pos_y,
-                                                          self.z_sz_ph: 160,
+                                                          self.z_sz_ph: np.array([160], dtype=np.float64),
                                                           self.image_input: first_frame
                                                       })
             print("first frame template encoded")
-            # print('template %s' % str(templates_z_))
-            # print('c_x %s, c_y %s' % (str(c_x), str(c_z)))
-            # print("padded z %s" % p_z)
             self.template_data = templates_z_
             
             for each_frame in range(1, len(frames)):
-                print("processing frame %d" % each_frame)
+                print("processed frame %d" % each_frame)
+                start_time = time.time()
                 each_frame = frames[each_frame]
                 scaled_exemplar = self.z_sz * self.scale_factors
                 scaled_search_area = self.x_sz * self.scale_factors
@@ -93,8 +125,8 @@ class Tracker:
                     [self.image_input, self.scores, self.templates_z, self.template_x],
                     feed_dict={
                         self.image_input: each_frame,
-                        self.pos_x_ph: self.last_pos_x,
-                        self.pos_y_ph: self.last_pos_y,
+                        self.pos_x_ph: np.array(self.last_pos_x),
+                        self.pos_y_ph: np.array(self.last_pos_y),
                         self.x_sz0_ph: scaled_search_area[0],
                         self.x_sz1_ph: scaled_search_area[1],
                         self.x_sz2_ph: scaled_search_area[2],
@@ -121,6 +153,8 @@ class Tracker:
                                                                            self.final_score_sz, self.design.tot_stride,
                                                                            self.design.search_sz, self.hp.response_up,
                                                                            self.x_sz)
+                self.last_pos_x = np.array(self.last_pos_x)
+                self.last_pos_y = np.array(self.last_pos_y)
                 # convert <cx,cy,w,h> to <x1,y1,x2,y2> and save output
                 bbox_res.append((
                     (int(self.last_pos_x - target_w / 2),
@@ -128,28 +162,50 @@ class Tracker:
                     (int(self.last_pos_x + target_w / 2),
                      int(self.last_pos_y + target_h / 2))
                 ))
-                print('bbox %s' % str(bbox_res[-1]))
+
                 # update the target representation with a rolling average
                 if self.hp.z_lr > 0:
+                    if len(self.z_sz.shape) == 0:
+                        self.z_sz = np.array([self.z_sz])
+                        print(self.z_sz.shape)
                     new_templates_z_ = sess.run([self.templates_z],
                                                 feed_dict={
-                                                    self.pos_x_ph: self.last_pos_x,
-                                                    self.pos_y_ph: self.last_pos_y,
-                                                    self.z_sz_ph: self.z_sz,
+                                                    self.pos_x_ph: np.array(self.last_pos_x),
+                                                    self.pos_y_ph: np.array(self.last_pos_y),
+                                                    self.z_sz_ph: np.array(self.z_sz),
                                                     self.image_input: image_
                                                 })
                     
                     self.template_data = (1 - self.hp.z_lr) * np.asarray(
                         self.template_data) + self.hp.z_lr * np.asarray(new_templates_z_)
-                
                 # update template patch size
                 self.z_sz = (1 - self.hp.scale_lr) * self.z_sz + self.hp.scale_lr * scaled_exemplar[new_scale_id]
-                # frame = each_frame
-                # frame = cv2.rectangle(frame, bbox_res[-1][0], bbox_res[-1][1], (255, 0, 0))
-                # cv2.imshow('tracking', frame)
-                # if cv2.waitKey(2) & 0xFF == ord('q'):
-                #     break
+    
+                print('bbox %s' % str(bbox_res[-1]))
+                print("cost time %f" % (time.time() - start_time))
+                frame = each_frame
+                frame = cv2.rectangle(frame, bbox_res[-1][0], bbox_res[-1][1], (0, 0, 255))
+                cv2.imshow('tracking', frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
         return bbox_res
+
+    def save_tflite(self):
+        with tf.Session() as sess:
+            tf.global_variables_initializer().run()
+            print(store_dir)
+            converter = tflite.TocoConverter.from_session(sess,
+                                                          [self.image_input,
+                                                           self.pos_x_ph, self.pos_y_ph,
+                                                           self.x_sz0_ph, self.x_sz1_ph,
+                                                           self.x_sz2_ph, self.templates_z],
+        
+                                                          [self.image_input, self.scores,
+                                                           self.templates_z, self.template_x])
+            tflite_model = converter.convert()
+            open(os.path.join(store_dir, "converted_model.tflite", "wb")).write(tflite_model)
+            print(".tflite saved")
+            
 
 
 def _build_tracking_graph(image, final_score_sz, design, env,

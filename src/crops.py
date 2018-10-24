@@ -70,6 +70,9 @@ def pad_frame(im, frame_sz, pos_x, pos_y, patch_sz, avg_chan):
 
 
 def extract_crops_z(im, npad, pos_x, pos_y, sz_src, sz_dst):
+    pos_x = pos_x[0]
+    pos_y = pos_y[0]
+    sz_src = sz_src[0]
     c = sz_src / 2
     # get top-right corner of bbox and consider padding
     tr_x = npad + tf.cast(tf.round(pos_x - c), tf.int32)
@@ -103,6 +106,11 @@ def extract_crops_x(im, npad, pos_x, pos_y, sz_src0, sz_src1, sz_src2, sz_dst):
     :param sz_dst: 神经网络input的目标size
     :return:
     """
+    pos_x = pos_x[0]
+    pos_y = pos_y[0]
+    sz_src0 = sz_src0[0]
+    sz_src1 = sz_src1[0]
+    sz_src2 = sz_src2[0]
     # take center of the biggest scaled source patch
     c = sz_src2 / 2
     # get top-right corner of bbox and consider padding
