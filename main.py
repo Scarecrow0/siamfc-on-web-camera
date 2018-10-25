@@ -15,9 +15,6 @@ store_dir = os.path.join(os.path.dirname(__file__), 'm_store')
 if not os.path.exists(store_dir):
     os.makedirs(store_dir)
 
-    
-    
-
 
 class Monitor(threading.Thread):
     def __init__(self, video_src, rec=None, save=False):
@@ -39,7 +36,7 @@ class Monitor(threading.Thread):
         for each_f in range(len(self.src)):
             frame = self.src[each_f]
             if self.recs is not None:
-                print(self.recs[each_f])
+                # print(self.recs[each_f])
                 frame = cv2.rectangle(frame, self.recs[each_f][1], self.recs[each_f][0], (255, 0, 0))
             if self.save:
                 out.write(frame)
@@ -59,17 +56,21 @@ def tracking_process():
     print('input the tracking task length: ')
     length = input()
     length = int(length)
+
+    print('input the obj size')
+    sz = input()
+    sz = int(sz)
     
     # set up start position
     start_time = time.time()
     print('put the tracking obj into the box')
-    while time.time() - start_time < 1:
+    while time.time() - start_time < 5:
         fm = video_flow.fetch_frame()
         x = fm.shape[0]
         y = fm.shape[1]
         fm = cv2.rectangle(fm,
-                           (int(y / 2) - 80, int(x / 2) - 80),
-                           (int(y / 2) + 80, int(x / 2) + 80),
+                           (int(y / 2) - sz / 2, int(x / 2) - sz / 2),
+                           (int(y / 2) + sz / 2, int(x / 2) + sz / 2),
                            (255, 0, 0))
         cv2.imshow('tracking', fm)
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -81,7 +82,7 @@ def tracking_process():
     # Monitor(input_frames).run()
     # start tracking, input the frame sequence
     print("start tracking")
-    res = tracker_o.tracking(input_frames)
+    res = tracker_o.tracking(input_frames, bbox_sz=sz)
     #   buffer the result
     #   show the result
     print('show tracking result')
@@ -98,7 +99,7 @@ def save_tflite():
 
 
 if __name__ == '__main__':
-    # tracking_process()
-    save_tflite()
+    tracking_process()
+    # save_tflite()
     pass
 

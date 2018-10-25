@@ -73,10 +73,9 @@ class Tracker:
     
     def stop_tracking(self):
         self.template_data = None
-    
-    def tracking(self, frames):
+
+    def tracking(self, frames, bbox_sz=160):
         bbox_res = []
-        saver = tf.train.Saver()
 
         with tf.Session() as sess:
             tf.global_variables_initializer().run()
@@ -103,13 +102,13 @@ class Tracker:
             # file_writer = tf.summary.FileWriter('logs', sess.graph)
             # print("tensorboard log created")
 
-            image_, templates_z_ = sess.run(fetches=[self.image_input, self.templates_z, ],
-                                                      feed_dict={
-                                                          self.pos_x_ph: self.last_pos_x,
-                                                          self.pos_y_ph: self.last_pos_y,
-                                                          self.z_sz_ph: np.array([160], dtype=np.float64),
-                                                          self.image_input: first_frame
-                                                      })
+            templates_z_ = sess.run(fetches=[self.templates_z, ],
+                                    feed_dict={
+                                        self.pos_x_ph: self.last_pos_x,
+                                        self.pos_y_ph: self.last_pos_y,
+                                        self.z_sz_ph: np.array([bbox_sz], dtype=np.float64),
+                                        self.image_input: first_frame
+                                    })
             print("first frame template encoded")
             self.template_data = templates_z_
             
@@ -121,8 +120,8 @@ class Tracker:
                 scaled_search_area = self.x_sz * self.scale_factors
                 scaled_target_w = self.target_w * self.scale_factors
                 scaled_target_h = self.target_h * self.scale_factors
-                image_, scores_, z_, x_ = sess.run(
-                    [self.image_input, self.scores, self.templates_z, self.template_x],
+                scores_, x_ = sess.run(
+                    [self.scores, self.template_x],
                     feed_dict={
                         self.image_input: each_frame,
                         self.pos_x_ph: np.array(self.last_pos_x),
@@ -173,14 +172,14 @@ class Tracker:
                                                     self.pos_x_ph: np.array(self.last_pos_x),
                                                     self.pos_y_ph: np.array(self.last_pos_y),
                                                     self.z_sz_ph: np.array(self.z_sz),
-                                                    self.image_input: image_
+                                                    self.image_input: each_frame
                                                 })
                     
                     self.template_data = (1 - self.hp.z_lr) * np.asarray(
                         self.template_data) + self.hp.z_lr * np.asarray(new_templates_z_)
                 # update template patch size
                 self.z_sz = (1 - self.hp.scale_lr) * self.z_sz + self.hp.scale_lr * scaled_exemplar[new_scale_id]
-    
+
                 print('bbox %s' % str(bbox_res[-1]))
                 print("cost time %f" % (time.time() - start_time))
                 frame = each_frame
@@ -191,21 +190,21 @@ class Tracker:
         return bbox_res
 
     def save_tflite(self):
+        print('saving tflite file')
         with tf.Session() as sess:
             tf.global_variables_initializer().run()
             print(store_dir)
             converter = tflite.TocoConverter.from_session(sess,
                                                           [self.image_input,
                                                            self.pos_x_ph, self.pos_y_ph,
-                                                           self.x_sz0_ph, self.x_sz1_ph,
-                                                           self.x_sz2_ph, self.templates_z],
-        
-                                                          [self.image_input, self.scores,
+                                                           self.x_sz0_ph, self.x_sz1_ph, self.x_sz2_ph],
+                                                          [self.scores,
                                                            self.templates_z, self.template_x])
             tflite_model = converter.convert()
-            open(os.path.join(store_dir, "converted_model.tflite", "wb")).write(tflite_model)
-            print(".tflite saved")
-            
+            f = open(os.path.join(store_dir, "converted_model.tflite", "wb"))
+            f.write(tflite_model)
+            f.close()
+            # print(".tflite saved")
 
 
 def _build_tracking_graph(image, final_score_sz, design, env,
